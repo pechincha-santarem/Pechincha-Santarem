@@ -2,7 +2,7 @@
   "name": "Pechincha Santarém",
   "short_name": "Pechincha",
   "description": "As melhores promoções de Santarém em um só lugar",
-  "start_url": "/",
+  "start_url": "/#/",
   "display": "standalone",
   "background_color": "#FACC15",
   "theme_color": "#FACC15",
