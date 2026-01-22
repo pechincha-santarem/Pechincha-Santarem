@@ -23,8 +23,15 @@ const AdminLogin: React.FC = () => {
       return;
     }
 
-    setError(result.message || 'Falha ao entrar.');
-    setTimeout(() => setError(null), 3000);
+    const msg =
+  (result as any)?.message ||
+  (result as any)?.error ||
+  (result as any)?.errorMessage ||
+  'Falha ao entrar.';
+
+setError(msg);
+setTimeout(() => setError(null), 3000);
+
   };
 
   return (
