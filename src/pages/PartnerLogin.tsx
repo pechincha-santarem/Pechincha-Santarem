@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { authService } from '../services/authService';
@@ -6,18 +5,34 @@ import { authService } from '../services/authService';
 const PartnerLogin: React.FC = () => {
   const [formData, setFormData] = useState({ email: '', pass: '' });
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    const result = authService.loginPartner(formData.email, formData.pass);
+  const handleLogin = async (e: React.FormEvent) => {
+  e.preventDefault()
+  setError(null)
+  setLoading(true)
+
+  try {
+    const result = await authService.loginPartner(formData.email, formData.pass)
+
+    setLoading(false)
+
     if (result.success) {
-      navigate('/parceiro/dashboard');
-    } else {
-      setError(result.message || 'Erro ao fazer login.');
-      setTimeout(() => setError(null), 3000);
+      navigate('/parceiro/dashboard', { replace: true })
+      return
     }
-  };
+
+    setError(result.message)
+    setTimeout(() => setError(null), 3000)
+  } catch (err) {
+    console.error('[PartnerLogin] unexpected login error:', err)
+    setLoading(false)
+    setError('Erro ao conectar. Tente novamente.')
+    setTimeout(() => setError(null), 3000)
+  }
+  
+};
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -41,36 +56,39 @@ const PartnerLogin: React.FC = () => {
         <form onSubmit={handleLogin} className="space-y-4">
           <div className="space-y-2">
             <label className="text-xs font-black text-gray-400 uppercase px-1">E-mail</label>
-            <input 
-              type="email" 
+            <input
+              type="email"
               placeholder="seu@email.com"
               className="w-full px-6 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
               value={formData.email}
-              onChange={(e) => setFormData(prev => ({...prev, email: e.target.value}))}
+              onChange={(e) => setFormData((prev) => ({ ...prev, email: e.target.value }))}
               required
             />
           </div>
           <div className="space-y-2">
             <label className="text-xs font-black text-gray-400 uppercase px-1">Senha</label>
-            <input 
-              type="password" 
+            <input
+              type="password"
               placeholder="Digite sua senha"
               className="w-full px-6 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
               value={formData.pass}
-              onChange={(e) => setFormData(prev => ({...prev, pass: e.target.value}))}
+              onChange={(e) => setFormData((prev) => ({ ...prev, pass: e.target.value }))}
               required
             />
           </div>
-          <button 
+          <button
             type="submit"
-            className="w-full bg-black text-white font-black py-4 rounded-xl hover:bg-gray-800 transition-all shadow-lg active:scale-95"
+            disabled={loading}
+            className="w-full bg-black text-white font-black py-4 rounded-xl hover:bg-gray-800 transition-all shadow-lg active:scale-95 disabled:opacity-60"
           >
-            ENTRAR NO PAINEL
+            {loading ? 'ENTRANDO...' : 'ENTRAR NO PAINEL'}
           </button>
         </form>
 
         <div className="text-center">
-          <Link to="/" className="text-gray-400 text-xs hover:underline">Voltar para a Home</Link>
+          <Link to="/" className="text-gray-400 text-xs hover:underline">
+            Voltar para a Home
+          </Link>
         </div>
       </div>
     </div>

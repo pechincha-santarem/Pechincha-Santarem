@@ -1,16 +1,47 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { authService } from '../services/authService';
+import { supabase } from '../lib/supabaseClient';
+
+type SessionShape = {
+  role: string;
+  userId?: string;
+  userName?: string;
+  email?: string;
+} | null;
 
 const Layout: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const session = authService.getCurrentSession();
+
+  const [session, setSession] = useState<SessionShape>(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      const s = await authService.getCurrentSession();
+      if (mounted) setSession(s);
+    }
+
+    load();
+
+    // Atualiza ao logar/deslogar (Supabase)
+    const { data: sub } = supabase.auth.onAuthStateChange(() => {
+      load();
+    });
+
+    return () => {
+      mounted = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
 
   const isPartner = session?.role === 'partner';
 
-  const handleLogout = () => {
-    authService.logout();
+  const handleLogout = async () => {
+    await authService.logout();
+    setSession(null);
     navigate('/');
   };
 

@@ -9,17 +9,12 @@ const Login: React.FC = () => {
   const navigate = useNavigate();
 
   const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    const result = authService.loginClient(formData.email, formData.pass);
-    if (result.success) {
-      navigate('/');
-    } else {
-      setError(result.message || 'Erro ao fazer login.');
-      setTimeout(() => setError(null), 3000);
-    }
-  };
+  e.preventDefault();
+  setError('Login de cliente ainda não está disponível nesta versão.');
+  setTimeout(() => setError(null), 3000);
+};
 
-  return (
+return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white p-10 rounded-3xl shadow-xl border border-gray-100 space-y-8">
         <div className="text-center space-y-4">

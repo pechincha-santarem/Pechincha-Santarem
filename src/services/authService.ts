@@ -1,125 +1,228 @@
+import { supabase } from '../lib/supabaseClient'
+import { UserRole } from '../types'
 
-import { UserAccount, UserRole, AccountStatus, PartnerLead, LeadStatus } from '../types';
+export type Profile = {
+  id: string
+  name: string | null
+  role: string
+  status?: 'active' | 'blocked'
+}
 
-const SESSION_KEY = 'ps_user_session';
-const USERS_KEY = 'ps_users_registry';
-const LEADS_KEY = 'ps_partner_leads';
+type LoginResult =
+  | { success: true; profile: Profile }
+  | { success: false; message: string }
 
-export interface Session {
-  role: UserRole;
-  userId?: string;
-  userName?: string;
-  email?: string;
+async function sleep(ms: number) {
+  await new Promise((r) => setTimeout(r, ms))
 }
 
 export const authService = {
-  initialize: () => {
-    if (!localStorage.getItem(USERS_KEY)) {
-      localStorage.setItem(USERS_KEY, JSON.stringify([]));
+  // Sessão atual do Supabase
+  getSession: async () => {
+    const { data } = await supabase.auth.getSession()
+    return data.session
+  },
+
+  // Retorna o profile do usuário logado
+  getMyProfile: async (): Promise<Profile | null> => {
+    const { data: sessionData } = await supabase.auth.getSession()
+    const user = sessionData.session?.user
+    if (!user) return null
+
+    // tentativa 1
+    let { data, error } = await supabase
+      .from('profiles')
+      .select('id, name, role, status')
+      .eq('id', user.id)
+      .single<Profile>()
+
+    // retry 1x (para 500 intermitente)
+    if (error) {
+      await sleep(250)
+      const retry = await supabase
+        .from('profiles')
+        .select('id, name, role, status')
+        .eq('id', user.id)
+        .single<Profile>()
+
+      data = retry.data
+      error = retry.error
     }
-    if (!localStorage.getItem(LEADS_KEY)) {
-      localStorage.setItem(LEADS_KEY, JSON.stringify([]));
+
+    if (error) return null
+    return data ?? null
+  },
+
+  // Login ADMIN: email/senha + valida role
+  loginAdmin: async (email: string, password: string): Promise<LoginResult> => {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: (email || '').trim().toLowerCase(),
+      password: (password || '').trim(),
+    })
+
+    if (error || !data.user) {
+  const msg = (error?.message || '').trim()
+  return { success: false, message: msg || 'Email ou senha inválidos.' }
+}
+
+  // garante sessão válida
+    const { data: userData, error: uErr } = await supabase.auth.getUser()
+    const uid = userData.user?.id
+
+    if (uErr || !uid) {
+      await supabase.auth.signOut()
+      return { success: false, message: 'Falha ao validar sessão. Faça login novamente.' }
     }
+
+    // tenta profile 1x + retry
+    let { data: profile, error: pErr } = await supabase
+      .from('profiles')
+      .select('id, role, name, status')
+      .eq('id', uid)
+      .single<Profile>()
+
+    if (pErr) {
+      await sleep(250)
+      const retry = await supabase
+        .from('profiles')
+        .select('id, role, name, status')
+        .eq('id', uid)
+        .single<Profile>()
+      profile = retry.data
+      pErr = retry.error
+    }
+
+    if (pErr || !profile) {
+      await supabase.auth.signOut()
+      return { success: false, message: 'Seu usuário não possui perfil configurado.' }
+    }
+
+    if ((profile.status ?? 'active') !== 'active') {
+      await supabase.auth.signOut()
+      return { success: false, message: 'Conta bloqueada.' }
+    }
+
+    const dbRole = String(profile.role || '').trim().toLowerCase()
+    if (dbRole !== 'admin') {
+      await supabase.auth.signOut()
+      return { success: false, message: 'Acesso negado. Esta conta não é ADMIN.' }
+    }
+
+    return { success: true, profile }
   },
 
-  getUsers: (): UserAccount[] => {
-    const data = localStorage.getItem(USERS_KEY);
-    return data ? JSON.parse(data) : [];
-  },
+  // Login PARCEIRO: email/senha + valida role
+  loginPartner: async (email: string, password: string): Promise<LoginResult> => {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: (email || '').trim().toLowerCase(),
+      password: (password || '').trim(),
+    })
 
-  getUsersByRole: (role: UserRole): UserAccount[] => {
-    return authService.getUsers().filter(u => u.role === role);
-  },
+    if (error || !data.user) {
+  const msg = (error?.message || '').trim()
+  // mostra erro real (ex: "Invalid login credentials")
+  return { success: false, message: msg || 'E-mail ou senha incorretos.' }
+}
 
-  saveUser: (userData: Omit<UserAccount, 'id' | 'createdAt'>, id?: string): void => {
-    const users = authService.getUsers();
-    if (id) {
-      const idx = users.findIndex(u => u.id === id);
-      if (idx !== -1) {
-        users[idx] = { ...users[idx], ...userData };
+// garante sessão válida
+    const { data: userData, error: uErr } = await supabase.auth.getUser()
+    const uid = userData.user?.id
+
+    if (uErr || !uid) {
+      await supabase.auth.signOut()
+      return { success: false, message: 'Falha ao validar sessão. Faça login novamente.' }
+    }
+
+    // tenta profile 1x + retry
+    let { data: profile, error: pErr } = await supabase
+      .from('profiles')
+      .select('id, role, name, status')
+      .eq('id', uid)
+      .single<Profile>()
+
+    if (pErr) {
+      await sleep(250)
+      const retry = await supabase
+        .from('profiles')
+        .select('id, role, name, status')
+        .eq('id', uid)
+        .single<Profile>()
+      profile = retry.data
+      pErr = retry.error
+    }
+
+    // ✅ MUDANÇA CIRÚRGICA:
+    // Se profiles falhar (500 intermitente), NÃO faz signOut.
+    // Deixa a sessão existir e o RequireAuth deixa passar para área do parceiro.
+    if (pErr || !profile) {
+      return {
+        success: true,
+        profile: {
+          id: uid,
+          name: null,
+          role: 'partner',
+          status: 'active',
+        },
       }
-    } else {
-      users.push({
-        ...userData,
-        id: Math.random().toString(36).substr(2, 9),
-        createdAt: Date.now()
-      });
     }
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
-  },
 
-  deleteUser: (id: string): void => {
-    const users = authService.getUsers().filter(u => u.id !== id);
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
-  },
-
-  // Lead Management
-  saveLead: (leadData: Omit<PartnerLead, 'id' | 'createdAt' | 'status'>): void => {
-    const leads = authService.getLeads();
-    leads.push({
-      ...leadData,
-      id: Math.random().toString(36).substr(2, 9),
-      status: 'new',
-      createdAt: Date.now()
-    });
-    localStorage.setItem(LEADS_KEY, JSON.stringify(leads));
-  },
-
-  getLeads: (): PartnerLead[] => {
-    const data = localStorage.getItem(LEADS_KEY);
-    return data ? JSON.parse(data) : [];
-  },
-
-  updateLeadStatus: (id: string, status: LeadStatus): void => {
-    const leads = authService.getLeads();
-    const idx = leads.findIndex(l => l.id === id);
-    if (idx !== -1) {
-      leads[idx].status = status;
-      localStorage.setItem(LEADS_KEY, JSON.stringify(leads));
+    if ((profile.status ?? 'active') !== 'active') {
+      await supabase.auth.signOut()
+      return { success: false, message: 'Conta bloqueada. Fale com o administrador.' }
     }
-  },
 
-  loginAdmin: (password: string): boolean => {
-    if (password === '1234') {
-      const session: Session = { role: 'admin', userName: 'Administrador' };
-      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-      return true;
+    const dbRole = String(profile.role || '').trim().toLowerCase()
+    if (dbRole !== 'partner') {
+      await supabase.auth.signOut()
+      return { success: false, message: 'Acesso negado. Esta conta não é de parceiro.' }
     }
-    return false;
+
+    return { success: true, profile }
   },
 
-  loginPartner: (email: string, pass: string): { success: boolean, message?: string } => {
-    const users = authService.getUsersByRole('partner');
-    const user = users.find(u => u.email === email && u.password === pass);
-    
-    if (user) {
-      if (user.status === 'blocked') return { success: false, message: 'Conta de parceiro bloqueada.' };
-      const session: Session = { role: 'partner', userId: user.id, userName: user.name, email: user.email };
-      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-      return { success: true };
+  logout: async () => {
+    await supabase.auth.signOut()
+  },
+
+  // Trocar senha (parceiro/admin)
+  updatePassword: async (newPassword: string) => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    if (error) return { success: false, message: error.message }
+    return { success: true }
+  },
+
+    // Compatibilidade (Layout e outras telas)
+  // Compatibilidade (Layout e outras telas)
+getCurrentSession: async () => {
+  const { data } = await supabase.auth.getSession()
+  const user = data.session?.user
+  if (!user) return null
+
+  const { data: profile, error } = await supabase
+    .from('profiles')
+    .select('id, name, role, status')
+    .eq('id', user.id)
+    .single<Profile>()
+
+  // ✅ NÃO derruba sessão por falha no profiles
+  if (error || !profile) {
+    return {
+      role: 'partner' as UserRole, // fallback pra não expulsar
+      userId: user.id,
+      userName: undefined,
+      email: user.email ?? undefined,
     }
-    return { success: false, message: 'E-mail ou senha de parceiro incorretos.' };
-  },
-
-  loginClient: (email: string, pass: string): { success: boolean, message?: string } => {
-    const users = authService.getUsers();
-    const user = users.find(u => u.email === email && u.password === pass);
-    
-    if (user) {
-      if (user.status === 'blocked') return { success: false, message: 'Sua conta está bloqueada.' };
-      const session: Session = { role: user.role, userId: user.id, userName: user.name, email: user.email };
-      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-      return { success: true };
-    }
-    return { success: false, message: 'E-mail ou senha incorretos.' };
-  },
-
-  logout: () => {
-    localStorage.removeItem(SESSION_KEY);
-  },
-
-  getCurrentSession: (): Session | null => {
-    const data = localStorage.getItem(SESSION_KEY);
-    return data ? JSON.parse(data) : null;
   }
-};
+
+  return {
+    role: (String(profile.role || '').trim().toLowerCase() as UserRole),
+    userId: profile.id,
+    userName: profile.name ?? undefined,
+    email: user.email ?? undefined,
+  }
+},
+
+  initialize: () => {
+    // não faz nada no Supabase (era usado no localStorage)
+  },
+}

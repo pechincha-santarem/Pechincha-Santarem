@@ -4,35 +4,92 @@ import { Promotion } from '../types';
 import { promotionService } from '../services/promotionService';
 import { authService } from '../services/authService';
 
-const ADMIN_WHATSAPP = '5593981340104'; // ✅ número que você passou
+const ADMIN_WHATSAPP = '5593981340104';
 
 function openAdminWhatsApp(message: string) {
   const text = encodeURIComponent(message);
   window.open(`https://wa.me/${ADMIN_WHATSAPP}?text=${text}`, '_blank', 'noopener,noreferrer');
 }
 
+type SessionInfo = {
+  role: 'admin' | 'partner' | 'customer';
+  userId: string;
+  userName?: string;
+  email?: string;
+} | null;
+
 const PartnerDashboard: React.FC = () => {
   const navigate = useNavigate();
-  const session = authService.getCurrentSession();
 
+  const [session, setSession] = useState<SessionInfo>(null);
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [filter, setFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
 
+  const loadMineByStoreName = (s: SessionInfo) => {
+    if (!s) return [];
+
+    const all = promotionService.getAll(false);
+    const my = all.filter(p =>
+      String((p as any).storeName || '').trim().toLowerCase() ===
+      String(s.userName || '').trim().toLowerCase()
+    );
+
+    return my;
+  };
+
   useEffect(() => {
-    if (!session || session.role !== 'partner') {
-      navigate('/parceiro/login');
-      return;
-    }
-    promotionService.initialize?.();
-    reload();
+    let mounted = true;
+
+    (async () => {
+      const s = await authService.getCurrentSession();
+
+      if (!mounted) return;
+
+      if (!s || s.role !== 'partner') {
+        navigate('/parceiro/login', { replace: true });
+        return;
+      }
+
+      setSession(s);
+
+      promotionService.initialize?.();
+
+      setPromotions(loadMineByStoreName(s));
+    })();
+
+    return () => {
+      mounted = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const reload = () => {
-    if (!session?.userId) return;
-    const list = promotionService.getByPartner(session.userId);
-    setPromotions(list);
+    if (!session) return;
+    setPromotions(loadMineByStoreName(session));
   };
+
+  // ✅ Excluir: garante que promo antiga recebe partnerId ANTES e recarrega com o mesmo filtro da listagem
+  const handleDeletePromo = (promo: Promotion) => {
+  const ok = window.confirm('Excluir esta promoção? Essa ação não tem volta.');
+  if (!ok) return;
+
+  const partnerId = session?.userId;
+  if (!partnerId) {
+    alert('Sessão inválida. Faça login novamente.');
+    return;
+  }
+
+  // ✅ agora funciona para promo nova (partnerId) e antiga (storeName)
+  promotionService.deleteByPartner(promo.id, partnerId, session?.userName);
+reload();
+
+  // ✅ recarrega sua lista do jeito que você já filtra (storeName == userName)
+  reload();
+
+  // (opcional) debug
+  const stillExists = promotionService.getAll(false).some(p => p.id === promo.id);
+  console.log('[PartnerDashboard] delete result:', { id: promo.id, stillExists });
+};
 
   const filtered = useMemo(() => {
     if (filter === 'all') return promotions;
@@ -118,13 +175,16 @@ const PartnerDashboard: React.FC = () => {
               {filtered.map(promo => (
                 <tr key={promo.id} className="hover:bg-gray-50/50 transition-colors">
                   <td className="px-6 py-5 flex items-center gap-4">
-                    <img
-                      src={promo.imageUrl}
-                      className="w-12 h-12 rounded-xl object-cover shadow-sm"
-                      alt=""
-                      onError={(e) => ((e.target as HTMLImageElement).src =
-                        'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80&w=200')}
-                    />
+                    {promo.imageUrl ? (
+                      <img
+                        src={promo.imageUrl}
+                        className="w-12 h-12 rounded-xl object-cover shadow-sm"
+                        alt=""
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-xl bg-gray-200 shadow-sm" />
+                    )}
+
                     <div>
                       <div className="text-gray-800 text-sm">{promo.title}</div>
                       <div className="text-[10px] text-gray-400 uppercase tracking-tighter">
@@ -149,7 +209,6 @@ const PartnerDashboard: React.FC = () => {
                     </div>
                   </td>
 
-                  {/* ✅ PEDIDOS (WhatsApp do admin) */}
                   <td className="px-6 py-5">
                     <div className="flex gap-2 flex-wrap">
                       <button
@@ -182,13 +241,25 @@ const PartnerDashboard: React.FC = () => {
                     >
                       <i className="fas fa-edit"></i>
                     </button>
+
+                    <button
+  onClick={() => handleDeletePromo(promo)}
+  className="text-red-500 hover:text-red-600 transition-colors"
+  title="Excluir"
+>
+  <i className="fas fa-trash"></i>
+</button>
+
                   </td>
                 </tr>
               ))}
 
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-6 py-16 text-center text-gray-400 font-bold uppercase text-xs tracking-widest">
+                  <td
+                    colSpan={4}
+                    className="px-6 py-16 text-center text-gray-400 font-bold uppercase text-xs tracking-widest"
+                  >
                     Nenhuma promoção encontrada.
                   </td>
                 </tr>

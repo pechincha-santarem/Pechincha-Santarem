@@ -1,7 +1,7 @@
-
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/authService';
+import { supabase } from '../lib/supabaseClient';
 
 const Advertise: React.FC = () => {
   const [formData, setFormData] = useState({
@@ -20,16 +20,36 @@ const Advertise: React.FC = () => {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
-    // Simula envio e salva como lead
-    setTimeout(() => {
-      authService.saveLead(formData);
-      setLoading(false);
+
+    try {
+      // ✅ grava como "interessado" na tabela partners (leads)
+      // schema existente: id, name, phone, city, created_at, active, status
+      const payload = {
+        name: formData.companyName.trim(),
+        phone: formData.whatsapp.trim(),
+        city: formData.city.trim(),
+        status: 'new',
+        active: false,
+      };
+
+      const { error } = await supabase.from('partners').insert(payload);
+
+      if (error) {
+        console.error('[Advertise] insert lead error:', error);
+        alert('Erro ao enviar interesse. Tente novamente.');
+        return;
+      }
+
       setSubmitted(true);
-    }, 1000);
+    } catch (err) {
+      console.error('[Advertise] unexpected error:', err);
+      alert('Erro de conexão. Tente novamente.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (submitted) {

@@ -1,232 +1,213 @@
-import { Promotion, PromotionStatus } from '../types';
-import { authService } from './authService';
+import { Promotion } from '../types';
 
 const STORAGE_KEY = 'pechincha_santarem_promotions';
 const FAVORITES_KEY = 'pechincha_santarem_favorites';
 
-function onlyDigits(v: string) {
-  return (v || '').replace(/\D/g, '');
+function norm(v: any) {
+  return String(v ?? '').trim().toLowerCase();
 }
 
-// Normaliza WhatsApp de forma segura:
-// - aceita número puro: "5593..." ou "93..." ou "559398..."
-// - aceita link: "https://wa.me/..."
-function normalizeWhatsAppUrl(input: string) {
-  const raw = (input || '').trim();
-  if (!raw) return '';
+function genId() {
+  // id simples e estável (string)
+  return (
+    Date.now().toString(36) +
+    Math.random().toString(36).slice(2, 10)
+  );
+}
 
-  // se já veio como link, tenta extrair número e reconstruir
-  if (raw.includes('wa.me') || raw.includes('whatsapp.com')) {
-    const digits = onlyDigits(raw);
-    if (!digits) return raw;
-    return `https://wa.me/${digits}`;
+function normalizeStatus(raw: any) {
+  const s = norm(raw);
+
+  if (s === 'pending' || s === 'pendente') return 'pending';
+  if (s === 'approved' || s === 'aprovado' || s === 'aprovada') return 'approved';
+  if (s === 'rejected' || s === 'reprovado' || s === 'reprovada') return 'rejected';
+
+  return 'pending';
+}
+
+function readFavs(): string[] {
+  try {
+    const raw = localStorage.getItem(FAVORITES_KEY);
+    const data = raw ? JSON.parse(raw) : [];
+    return Array.isArray(data) ? (data as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeFavs(ids: string[]) {
+  localStorage.setItem(FAVORITES_KEY, JSON.stringify(ids));
+}
+
+function readAll(): Promotion[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const data = raw ? JSON.parse(raw) : [];
+    const arr = Array.isArray(data) ? data : [];
+
+    // ✅ GARANTIA: toda promo precisa ter id (se não tiver, cria)
+    const withId = arr.map((p: any) => {
+      const id = String(p?.id ?? '').trim();
+      const fixedId = id ? id : genId();
+      return {
+        ...p,
+        id: fixedId,
+        status: normalizeStatus(p?.status),
+      };
+    });
+
+    // ✅ DEDUPE por id (mantém a última versão)
+    const map = new Map<string, any>();
+    for (const p of withId) map.set(String(p.id), p);
+    const deduped = Array.from(map.values());
+
+    // regrava consistente (evita sumir/duplicar depois)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(deduped));
+
+    return deduped as Promotion[];
+  } catch {
+    return [];
+  }
+}
+
+function writeAll(list: Promotion[]) {
+  const normalized = (Array.isArray(list) ? list : []).map((p: any) => {
+    const id = String(p?.id ?? '').trim();
+    return {
+      ...p,
+      id: id ? id : genId(),
+      status: normalizeStatus(p?.status),
+    };
+  });
+
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+}
+
+class PromotionService {
+  private initialized = false;
+
+  initialize() {
+    if (this.initialized) return;
+    this.initialized = true;
+
+    if (!localStorage.getItem(STORAGE_KEY)) writeAll([]);
+    if (!localStorage.getItem(FAVORITES_KEY)) writeFavs([]);
   }
 
-  // número puro
-  const digits = onlyDigits(raw);
-  if (!digits) return '';
+  // ===============================
+  // PROMOS
+  // ===============================
+  getAll(onlyApproved = false): Promotion[] {
+    const all = readAll();
+    return onlyApproved ? all.filter((p: any) => p.status === 'approved') : all;
+  }
 
-  // se já começa com 55, mantém; se não, mantém como está (você pode optar por forçar 55)
-  const finalDigits = digits.startsWith('55') ? digits : digits;
-  return `https://wa.me/${finalDigits}`;
-}
+  getById(id: string): Promotion | undefined {
+    const sid = String(id);
+    return readAll().find(p => String((p as any).id) === sid);
+  }
 
-export const promotionService = {
-  initialize: () => {
-    authService.initialize();
-    const data = localStorage.getItem(STORAGE_KEY);
+  getByPartner(partnerId: string): Promotion[] {
+    const pid = norm(partnerId);
+    return readAll().filter(p => norm((p as any).partnerId) === pid);
+  }
 
-    if (!data || JSON.parse(data).length === 0) {
-      const seedPartnerId = 'seed-partner';
+  save(promo: Promotion, id?: string) {
+    const all = readAll();
 
-      const now = Date.now();
-      const flash24h = new Date(now + 24 * 60 * 60 * 1000).toISOString();
+    // ✅ garante id (se vier vazio, cria)
+    const incomingId = id ? String(id) : String((promo as any)?.id ?? '').trim();
+    const finalId = incomingId ? incomingId : genId();
 
-      const initial: Promotion[] = [
-        {
-          id: '1',
-          title: "Arroz Tio Jorge 5kg",
-          description: "Arroz agulhinha tipo 1.",
-          currentPrice: 24.90,
-          oldPrice: 32.00,
-          category: "Supermercado",
-          expiryDate: "2026-12-31",
-          imageUrl: "https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&q=80&w=400",
-          storeName: "Supermercado CR",
-          status: "approved",
-          isFeatured: true,
-          isFlash: false,
-          flashUntil: undefined,
-          partnerId: seedPartnerId,
-          createdAt: now,
-          destinationType: 'WhatsApp',
-          destinationUrl: 'https://wa.me/5593999999999',
-        },
-        {
-          id: '2',
-          title: "Óleo de Soja Liza 900ml",
-          description: "Promoção relâmpago (exemplo).",
-          currentPrice: 5.49,
-          oldPrice: 8.90,
-          category: "Supermercado",
-          expiryDate: "2026-12-25",
-          imageUrl: "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?auto=format&fit=crop&q=80&w=400",
-          storeName: "Mercadão Popular",
-          status: "approved",
-          isFeatured: false,
-          isFlash: true,
-          flashUntil: flash24h,
-          partnerId: seedPartnerId,
-          createdAt: now - 1000,
-          destinationType: 'WhatsApp',
-          destinationUrl: 'https://wa.me/5593988888888',
-        }
-      ];
-
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
-    }
-  },
-
-  getAll: (onlyApproved = true): Promotion[] => {
-    const data = localStorage.getItem(STORAGE_KEY);
-    const promotions: Promotion[] = data ? JSON.parse(data) : [];
-
-    const list = onlyApproved
-      ? promotions.filter(p => p.status === 'approved')
-      : promotions;
-
-    const now = Date.now();
-
-    // ✅ Ordenação profissional:
-    // 1) relâmpago válido primeiro
-    // 2) depois destaque
-    // 3) depois mais recente
-    return list.sort((a, b) => {
-      const aFlashValid =
-        Boolean(a.isFlash && a.flashUntil && new Date(a.flashUntil).getTime() > now);
-      const bFlashValid =
-        Boolean(b.isFlash && b.flashUntil && new Date(b.flashUntil).getTime() > now);
-
-      if (aFlashValid !== bFlashValid) return aFlashValid ? -1 : 1;
-
-      const aFeat = Boolean(a.isFeatured);
-      const bFeat = Boolean(b.isFeatured);
-      if (aFeat !== bFeat) return aFeat ? -1 : 1;
-
-      return (b.createdAt || 0) - (a.createdAt || 0);
-    });
-  },
-
-  getByPartner: (partnerId: string): Promotion[] => {
-    const promotions = promotionService.getAll(false);
-    return promotions.filter(p => p.partnerId === partnerId);
-  },
-
-  getById: (id: string): Promotion | undefined => {
-    const promotions = promotionService.getAll(false);
-    return promotions.find(p => p.id === id);
-  },
-
-  // ✅ Agora aceita PATCH parcial (admin pode enviar isFlash / flashUntil / isFeatured / status)
-  save: (promotionData: Partial<Promotion>, id?: string): Promotion => {
-    const promotions = promotionService.getAll(false);
-    const session = authService.getCurrentSession();
-
-    // destino padrão (mantém existente se não vier)
-    const incomingType = promotionData.destinationType;
-    const incomingUrl = promotionData.destinationUrl;
-
-    // processa WhatsApp se vier tipo+url
-    let processedData: any = { ...promotionData };
-
-    if (incomingType && typeof incomingUrl === 'string') {
-      if (incomingType === 'WhatsApp') {
-        processedData.destinationUrl = normalizeWhatsAppUrl(incomingUrl);
-      } else {
-        processedData.destinationUrl = (incomingUrl || '').trim();
-      }
-    }
-
-    if (id) {
-      const index = promotions.findIndex(p => p.id === id);
-      if (index === -1) throw new Error("Promoção não encontrada");
-
-      const current = promotions[index];
-
-      // ✅ Regra: se parceiro editar, volta pra pendente (mas NÃO apaga flags admin)
-      const nextStatus =
-        session?.role === 'admin'
-          ? (processedData.status ?? current.status)
-          : 'pending';
-
-      const updated: Promotion = {
-        ...current,
-        ...processedData,
-        status: nextStatus,
-      };
-
-      promotions[index] = updated;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(promotions));
-      return updated;
-    }
-
-    // criação
-    const partnerId = session?.userId || 'admin-created';
-    const newPromo: Promotion = {
-      // defaults mínimos
-      id: Math.random().toString(36).substr(2, 9),
-      createdAt: Date.now(),
-      partnerId,
-      status: 'pending',
-
-      // defaults de admin
-      isFeatured: false,
-      isFlash: false,
-      flashUntil: undefined,
-
-      // aplica dados vindos
-      ...(processedData as any),
+    const next: any = {
+      ...(promo as any),
+      id: finalId,
+      status: normalizeStatus((promo as any)?.status),
     };
 
-    // Se criar como admin e vier status, respeita
-    if (session?.role === 'admin' && processedData.status) {
-      newPromo.status = processedData.status;
+    const idx = all.findIndex(p => String((p as any).id) === finalId);
+
+    if (idx >= 0) {
+      all[idx] = { ...(all[idx] as any), ...next } as any;
+    } else {
+      all.push(next);
     }
 
-    promotions.push(newPromo);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(promotions));
-    return newPromo;
-  },
-
-  updateStatus: (id: string, status: PromotionStatus): void => {
-    const promotions = promotionService.getAll(false);
-    const index = promotions.findIndex(p => p.id === id);
-    if (index !== -1) {
-      promotions[index].status = status;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(promotions));
-    }
-  },
-
-  delete: (id: string): void => {
-    const promotions = promotionService.getAll(false);
-    const filtered = promotions.filter(p => p.id !== id);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
-  },
-
-  getFavorites: (): string[] => {
-    const data = localStorage.getItem(FAVORITES_KEY);
-    return data ? JSON.parse(data) : [];
-  },
-
-  toggleFavorite: (id: string): void => {
-    const favorites = promotionService.getFavorites();
-    const index = favorites.indexOf(id);
-    if (index === -1) favorites.push(id);
-    else favorites.splice(index, 1);
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites));
-  },
-
-  isFavorite: (id: string): boolean => {
-    return promotionService.getFavorites().includes(id);
+    writeAll(all);
   }
-};
+
+  updateStatus(id: string, status: any) {
+    const all = readAll();
+    const sid = String(id);
+
+    const idx = all.findIndex(p => String((p as any).id) === sid);
+    if (idx < 0) return;
+
+    all[idx] = { ...(all[idx] as any), status: normalizeStatus(status) } as any;
+    writeAll(all);
+  }
+
+  deleteByAdmin(id: string) {
+    const sid = String(id);
+    const all = readAll();
+    writeAll(all.filter(p => String((p as any).id) !== sid));
+
+    // limpa favoritos
+    const favs = readFavs().filter(fid => String(fid) !== sid);
+    writeFavs(favs);
+  }
+
+  /**
+   * ✅ Parceiro só apaga do próprio:
+   * - se partnerId bater => apaga
+   * - senão, permite apenas se storeName bater com partnerName (compatibilidade)
+   */
+  deleteByPartner(id: string, partnerId: string, partnerName?: string) {
+    const sid = String(id);
+    const all = readAll();
+    const target = all.find(p => String((p as any).id) === sid);
+    if (!target) return;
+
+    const tPartnerId = norm((target as any).partnerId);
+    const sPartnerId = norm(partnerId);
+
+    const tStore = norm((target as any).storeName);
+    const sName = norm(partnerName);
+
+    const canDeleteById = tPartnerId && tPartnerId === sPartnerId;
+    const canDeleteByName = sName && tStore && tStore === sName;
+
+    if (!canDeleteById && !canDeleteByName) return;
+
+    writeAll(all.filter(p => String((p as any).id) !== sid));
+
+    const favs = readFavs().filter(fid => String(fid) !== sid);
+    writeFavs(favs);
+  }
+
+  // ===============================
+  // FAVORITOS
+  // ===============================
+  isFavorite(id: string): boolean {
+    const sid = String(id);
+    return readFavs().some(x => String(x) === sid);
+  }
+
+  toggleFavorite(id: string) {
+    const sid = String(id);
+    const favs = readFavs().map(x => String(x));
+
+    if (favs.includes(sid)) {
+      writeFavs(favs.filter(x => x !== sid));
+    } else {
+      writeFavs([...favs, sid]);
+    }
+  }
+
+  getFavorites(): string[] {
+    return readFavs().map(x => String(x));
+  }
+}
+
+export const promotionService = new PromotionService();
+export { STORAGE_KEY, FAVORITES_KEY };

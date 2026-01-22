@@ -1,5 +1,7 @@
 import { Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
+import RequireAuth from './components/RequireAuth'
+
 import Home from './pages/Home'
 import PartnerDashboard from './pages/PartnerDashboard'
 import PromotionForm from './pages/PromotionForm'
@@ -18,15 +20,49 @@ export default function App() {
 
         {/* Parceiro */}
         <Route path="/parceiro/login" element={<PartnerLogin />} />
-        <Route path="/parceiro/dashboard" element={<PartnerDashboard />} />
-        <Route path="/nova-promocao" element={<PromotionForm />} />
-        <Route path="/editar-promocao/:id" element={<PromotionForm />} />
+
+        <Route
+          path="/parceiro/dashboard"
+          element={
+            <RequireAuth role="partner">
+              <PartnerDashboard />
+            </RequireAuth>
+          }
+        />
+
+        <Route
+          path="/nova-promocao"
+          element={
+            <RequireAuth role="partner">
+              <PromotionForm />
+            </RequireAuth>
+          }
+        />
+
+        <Route
+          path="/editar-promocao/:id"
+          element={
+            <RequireAuth role="partner">
+              <PromotionForm />
+            </RequireAuth>
+          }
+        />
 
         {/* Admin */}
         <Route path="/admin" element={<AdminLogin />} />
-        <Route path="/admin/dashboard" element={<AdminDashboard />} />
+
+        <Route
+          path="/admin/dashboard"
+          element={
+            <RequireAuth role="admin">
+              <AdminDashboard />
+            </RequireAuth>
+          }
+        />
+
+        {/* Fallback */}
+        <Route path="*" element={<Home />} />
       </Route>
     </Routes>
   )
 }
-<Route path="*" element={<Home />} />

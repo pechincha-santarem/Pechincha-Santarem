@@ -1,21 +1,30 @@
-
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/authService';
 
 const AdminLogin: React.FC = () => {
+  const [email, setEmail] = useState('');
   const [pass, setPass] = useState('');
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (authService.loginAdmin(pass)) {
+    setError(null);
+    setLoading(true);
+
+    const result = await authService.loginAdmin(email, pass);
+
+    setLoading(false);
+
+    if (result.success) {
       navigate('/admin/dashboard');
-    } else {
-      setError(true);
-      setTimeout(() => setError(false), 2000);
+      return;
     }
+
+    setError(result.message || 'Falha ao entrar.');
+    setTimeout(() => setError(null), 3000);
   };
 
   return (
@@ -24,27 +33,53 @@ const AdminLogin: React.FC = () => {
         <div className="bg-black text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto text-2xl">
           <i className="fas fa-shield-alt"></i>
         </div>
+
         <div>
           <h1 className="text-2xl font-black">ACESSO ADMINISTRATIVO</h1>
           <p className="text-gray-500 text-sm">Controle de anúncios e parceiros</p>
         </div>
+
+        {error && (
+          <div className="bg-red-50 text-red-600 p-4 rounded-xl text-xs font-bold text-center border border-red-100">
+            {error}
+          </div>
+        )}
+
         <form onSubmit={handleLogin} className="space-y-4">
-          <input 
-            type="password" 
-            placeholder="Senha ADM"
-            className={`w-full px-6 py-4 rounded-xl border ${error ? 'border-red-500' : 'border-gray-200'} focus:ring-2 focus:ring-yellow-400 outline-none transition-all`}
+          <input
+            type="email"
+            placeholder="Email do Admin"
+            className={`w-full px-6 py-4 rounded-xl border ${
+              error ? 'border-red-500' : 'border-gray-200'
+            } focus:ring-2 focus:ring-yellow-400 outline-none transition-all`}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+
+          <input
+            type="password"
+            placeholder="Senha"
+            className={`w-full px-6 py-4 rounded-xl border ${
+              error ? 'border-red-500' : 'border-gray-200'
+            } focus:ring-2 focus:ring-yellow-400 outline-none transition-all`}
             value={pass}
             onChange={(e) => setPass(e.target.value)}
             required
           />
-          <button 
+
+          <button
             type="submit"
-            className="w-full bg-black text-white font-bold py-4 rounded-xl hover:bg-gray-800 transition-all shadow-lg active:scale-95"
+            disabled={loading}
+            className="w-full bg-black text-white font-bold py-4 rounded-xl hover:bg-gray-800 transition-all shadow-lg active:scale-95 disabled:opacity-60"
           >
-            ENTRAR NO PAINEL
+            {loading ? 'ENTRANDO...' : 'ENTRAR NO PAINEL'}
           </button>
         </form>
-        <button onClick={() => navigate('/')} className="text-gray-400 text-xs hover:underline">Voltar para o site</button>
+
+        <button onClick={() => navigate('/')} className="text-gray-400 text-xs hover:underline">
+          Voltar para o site
+        </button>
       </div>
     </div>
   );

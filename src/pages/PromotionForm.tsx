@@ -1,3 +1,4 @@
+import { supabase } from '../lib/supabaseClient';
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CATEGORIES, PromotionDestination } from '../types';
@@ -6,6 +7,9 @@ import { authService } from '../services/authService';
 
 const inputStyle =
   "w-full px-4 py-3 rounded-xl border border-gray-300 font-bold outline-none focus:ring-2 focus:ring-yellow-400";
+
+// ✅ Bucket do Supabase Storage (crie como PUBLIC com este nome)
+const STORAGE_BUCKET = 'promotions';
 
 const PromotionForm: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
@@ -31,6 +35,11 @@ const PromotionForm: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ✅ arquivo real (não base64)
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  // ✅ preview local
+  const [previewUrl, setPreviewUrl] = useState<string>('');
+
   useEffect(() => {
     if (isEdit && id) {
       const existing = promotionService.getById(id);
@@ -42,77 +51,140 @@ const PromotionForm: React.FC = () => {
           oldPrice: String(existing.oldPrice),
           category: existing.category,
           expiryDate: existing.expiryDate,
-          imageUrl: existing.imageUrl,
+          imageUrl: existing.imageUrl || '',
           storeName: existing.storeName,
           isFeatured: existing.isFeatured,
           destinationType: existing.destinationType || 'WhatsApp',
-          // ✅ Se for WhatsApp, deixa o campo com números; senão deixa URL normal
           destinationUrl:
             existing.destinationType === 'WhatsApp'
               ? (existing.destinationUrl || '').replace(/\D/g, '')
               : (existing.destinationUrl || '')
         });
+
+        // ✅ no edit: se já tem imagem salva, usa como preview
+        setPreviewUrl(existing.imageUrl || '');
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isEdit]);
+
+  // ✅ limpa URL de preview criada com createObjectURL
+  useEffect(() => {
+    return () => {
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
 
   const handleChange = (e: React.ChangeEvent<any>) => {
     const { name, value, type, checked } = e.target;
 
-    // ✅ se o destino é WhatsApp, mantém só números no input
-    if (name === "destinationUrl" && formData.destinationType === "WhatsApp") {
+    // ✅ se o destino é WhatsApp, mantém só números
+    if (name === 'destinationUrl' && formData.destinationType === 'WhatsApp') {
       setFormData(prev => ({ ...prev, destinationUrl: value.replace(/\D/g, '') }));
       return;
     }
 
     setFormData(prev => ({
       ...prev,
-      [name]: type === "checkbox" ? checked : value
+      [name]: type === 'checkbox' ? checked : value
     }));
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const file = e.target.files?.[0];
+  if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      setFormData(prev => ({ ...prev, imageUrl: reader.result as string }));
-    };
-    reader.readAsDataURL(file);
+  setImageFile(file);
+
+  // ✅ remove preview anterior (evita duplicidade / vazamento de memória)
+  setPreviewUrl(prev => {
+    if (prev && prev.startsWith('blob:')) {
+      URL.revokeObjectURL(prev);
+    }
+    return URL.createObjectURL(file);
+  });
+};
+
+  const uploadImageToStorage = async (file: File, partnerId: string) => {
+    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    const safeExt = ext.replace(/[^a-z0-9]/g, '') || 'jpg';
+
+    const filename = `${Date.now()}_${Math.random().toString(16).slice(2)}.${safeExt}`;
+    const path = `${partnerId}/${filename}`;
+
+    const { error: upErr } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .upload(path, file, {
+        upsert: true,
+        contentType: file.type || 'image/jpeg'
+      });
+
+    if (upErr) throw upErr;
+
+    const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+
+    const publicUrl = data?.publicUrl || '';
+    if (!publicUrl) throw new Error('Falha ao obter URL pública da imagem.');
+
+    return publicUrl;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
+  e.preventDefault();
+  setLoading(true);
+  setError(null);
 
-    try {
-      promotionService.save(
-        {
-          title: formData.title,
-          description: formData.description,
-          currentPrice: Number(formData.currentPrice),
-          oldPrice: Number(formData.oldPrice || 0),
-          category: formData.category,
-          expiryDate: formData.expiryDate,
-          imageUrl: formData.imageUrl,
-          storeName: formData.storeName,
-          isFeatured: formData.isFeatured,
-          destinationType: formData.destinationType,
-          destinationUrl: formData.destinationUrl
-        },
-        id
-      );
+  try {
+    // ✅ pega a sessão REAL no momento do submit (sem depender do topo do componente)
+    const s = await authService.getCurrentSession();
 
-      // ✅ CORREÇÃO: rota certa do parceiro
-      navigate(session?.role === 'admin' ? '/admin/dashboard' : '/parceiro/dashboard');
-    } catch (err: any) {
-      setError(err?.message || 'Erro ao salvar promoção.');
-    } finally {
-      setLoading(false);
+    const partnerId = (s as any)?.userId;
+    if (!partnerId) {
+      throw new Error('Sessão inválida: partnerId não encontrado.');
     }
-  };
+
+    // ✅ se tiver imagem nova, sobe pro Storage e pega URL pública
+    let finalImageUrl = formData.imageUrl;
+
+    if (imageFile) {
+      finalImageUrl = await uploadImageToStorage(imageFile, partnerId);
+    }
+
+    // ✅ proteção final contra base64
+    if (typeof finalImageUrl === 'string' && finalImageUrl.startsWith('data:image/')) {
+      finalImageUrl = '';
+    }
+
+    promotionService.save(
+      {
+        title: formData.title,
+        description: formData.description,
+        currentPrice: Number(formData.currentPrice),
+        oldPrice: Number(formData.oldPrice || 0),
+        category: formData.category,
+        expiryDate: formData.expiryDate,
+        imageUrl: finalImageUrl,
+        storeName: formData.storeName,
+        isFeatured: formData.isFeatured,
+        destinationType: formData.destinationType,
+        destinationUrl: formData.destinationUrl,
+
+        // ✅ dono da promo
+        partnerId: partnerId,
+        partnerName: (s as any)?.userName || (s as any)?.name || '',
+      } as any,
+      id
+    );
+
+    navigate(s?.role === 'admin' ? '/admin/dashboard' : '/parceiro/dashboard');
+  } catch (err: any) {
+    setError(err?.message || 'Erro ao salvar promoção.');
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
@@ -131,8 +203,8 @@ const PromotionForm: React.FC = () => {
           onClick={() => fileInputRef.current?.click()}
           className="aspect-video w-full bg-yellow-50 border-2 border-dashed border-yellow-400 rounded-3xl flex items-center justify-center cursor-pointer overflow-hidden"
         >
-          {formData.imageUrl ? (
-            <img src={formData.imageUrl} className="w-full h-full object-contain bg-black" />
+          {previewUrl ? (
+            <img src={previewUrl} className="w-full h-full object-contain bg-black" />
           ) : (
             <span className="font-black text-yellow-500">CLIQUE PARA ENVIAR A IMAGEM</span>
           )}

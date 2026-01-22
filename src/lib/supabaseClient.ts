@@ -1,6 +1,21 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-export const supabase = createClient(supabaseUrl!, supabaseAnonKey!)
+declare global {
+  // eslint-disable-next-line no-var
+  var __pechincha_supabase__: SupabaseClient | undefined
+}
+
+export const supabase =
+  globalThis.__pechincha_supabase__ ??
+  (globalThis.__pechincha_supabase__ = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      storageKey: 'pechincha_santarem_auth',
+      storage: localStorage,
+    },
+  }))
