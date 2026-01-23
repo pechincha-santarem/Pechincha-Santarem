@@ -48,7 +48,11 @@ const PromotionCard: React.FC<PromotionCardProps> = ({
 
   const handleAction = () => {
     const raw = (promo.destinationUrl || '').trim();
-    if (!raw) return;
+if (!raw) {
+  alert('Destino da promoção não configurado. Edite a oferta e informe o WhatsApp ou link.');
+  return;
+}
+
 
     // ✅ Página Interna: navega dentro do app
     if (promo.destinationType === 'Página Interna') {

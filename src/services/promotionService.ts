@@ -1,30 +1,77 @@
 import { Promotion } from '../types';
+import { supabase } from '../lib/supabaseClient';
 
-const STORAGE_KEY = 'pechincha_santarem_promotions';
 const FAVORITES_KEY = 'pechincha_santarem_favorites';
 
 function norm(v: any) {
   return String(v ?? '').trim().toLowerCase();
 }
 
-function genId() {
-  // id simples e estável (string)
-  return (
-    Date.now().toString(36) +
-    Math.random().toString(36).slice(2, 10)
-  );
-}
-
 function normalizeStatus(raw: any) {
   const s = norm(raw);
-
   if (s === 'pending' || s === 'pendente') return 'pending';
   if (s === 'approved' || s === 'aprovado' || s === 'aprovada') return 'approved';
   if (s === 'rejected' || s === 'reprovado' || s === 'reprovada') return 'rejected';
-
   return 'pending';
 }
 
+function toNumber(v: any, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * ✅ Normaliza expiryDate do APP para DB:
+ * - Se já vier "YYYY-MM-DD" -> retorna igual
+ * - Se vier number (timestamp ms) -> converte para "YYYY-MM-DD"
+ * - Se vier vazio -> null
+ */
+function normalizeExpiryDateToDb(v: any): string | null {
+  const raw = String(v ?? '').trim();
+  if (!raw) return null;
+
+  // formato date do input <input type="date"> já vem assim
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  // se veio timestamp em ms
+  const asNum = Number(raw);
+  if (Number.isFinite(asNum) && asNum > 0) {
+    const d = new Date(asNum);
+    if (!isNaN(d.getTime())) {
+      return d.toISOString().slice(0, 10); // YYYY-MM-DD
+    }
+  }
+
+  // última tentativa: Date parse
+  const d2 = new Date(raw);
+  if (!isNaN(d2.getTime())) return d2.toISOString().slice(0, 10);
+
+  return null;
+}
+
+/**
+ * ✅ Normaliza expiry_date do DB para APP:
+ * - DB pode vir "YYYY-MM-DD" (date) ou ISO
+ * - No seu app, PromotionForm usa string no state e <input type="date">
+ * - Então devolvemos sempre "YYYY-MM-DD" (string)
+ */
+function normalizeExpiryDateFromDb(v: any): string {
+  if (v == null) return '';
+  const raw = String(v).trim();
+  if (!raw) return '';
+
+  // já está em YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  const d = new Date(raw);
+  if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+
+  return '';
+}
+
+// ===============================
+// FAVORITOS (localStorage)
+// ===============================
 function readFavs(): string[] {
   try {
     const raw = localStorage.getItem(FAVORITES_KEY);
@@ -39,137 +86,220 @@ function writeFavs(ids: string[]) {
   localStorage.setItem(FAVORITES_KEY, JSON.stringify(ids));
 }
 
-function readAll(): Promotion[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const data = raw ? JSON.parse(raw) : [];
-    const arr = Array.isArray(data) ? data : [];
+// ===============================
+// MAPEAMENTO Supabase <-> App
+// (DB = snake_case, App = camelCase)
+// ===============================
+type PromotionRow = {
+  id: string;
+  partner_id: string;
+  title: string;
+  description: string;
+  current_price: any;
+  old_price: any;
+  category: string;
+  expiry_date: any; // ✅ date (string) no DB
+  image_url: string | null;
+  store_name: string;
+  status: string;
+  is_featured: boolean;
+  is_flash: boolean;
+  flash_until: string | null; // timestamptz
+  destination_type: string | null;
+  destination_url: string | null;
+  created_at: string; // timestamptz
+};
 
-    // ✅ GARANTIA: toda promo precisa ter id (se não tiver, cria)
-    const withId = arr.map((p: any) => {
-      const id = String(p?.id ?? '').trim();
-      const fixedId = id ? id : genId();
-      return {
-        ...p,
-        id: fixedId,
-        status: normalizeStatus(p?.status),
-      };
-    });
+function fromRow(r: PromotionRow): Promotion {
+  return {
+    id: r.id,
+    partnerId: r.partner_id,
+    title: r.title,
+    description: r.description,
+    currentPrice: toNumber(r.current_price, 0),
+    oldPrice: toNumber(r.old_price, 0),
+    category: r.category as any,
 
-    // ✅ DEDUPE por id (mantém a última versão)
-    const map = new Map<string, any>();
-    for (const p of withId) map.set(String(p.id), p);
-    const deduped = Array.from(map.values());
+    // ✅ AGORA: string "YYYY-MM-DD" para o input date
+    expiryDate: normalizeExpiryDateFromDb(r.expiry_date) as any,
 
-    // regrava consistente (evita sumir/duplicar depois)
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(deduped));
+    imageUrl: r.image_url ?? '',
+    storeName: r.store_name,
+    status: normalizeStatus(r.status) as any,
+    isFeatured: Boolean(r.is_featured),
+    isFlash: Boolean(r.is_flash),
+    flashUntil: r.flash_until ? new Date(r.flash_until).toISOString() : (undefined as any),
+    destinationType: (r.destination_type ?? undefined) as any,
+    destinationUrl: (r.destination_url ?? undefined) as any,
 
-    return deduped as Promotion[];
-  } catch {
-    return [];
-  }
+    // se seu type tiver createdAt
+    createdAt: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+  } as any;
 }
 
-function writeAll(list: Promotion[]) {
-  const normalized = (Array.isArray(list) ? list : []).map((p: any) => {
-    const id = String(p?.id ?? '').trim();
-    return {
-      ...p,
-      id: id ? id : genId(),
-      status: normalizeStatus(p?.status),
-    };
-  });
+function toRow(p: Promotion, partnerIdFallback?: string): Partial<PromotionRow> {
+  const partnerId = String((p as any).partnerId || partnerIdFallback || '').trim();
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+  return {
+    partner_id: partnerId,
+    title: String((p as any).title ?? ''),
+    description: String((p as any).description ?? ''),
+    current_price: toNumber((p as any).currentPrice, 0),
+    old_price: toNumber((p as any).oldPrice, 0),
+    category: String((p as any).category ?? ''),
+
+    // ✅ AGORA: salva como date string
+    expiry_date: normalizeExpiryDateToDb((p as any).expiryDate),
+
+    image_url: (p as any).imageUrl ? String((p as any).imageUrl) : null,
+    store_name: String((p as any).storeName ?? ''),
+    status: normalizeStatus((p as any).status),
+    is_featured: Boolean((p as any).isFeatured),
+    is_flash: Boolean((p as any).isFlash),
+    flash_until: (p as any).flashUntil ? new Date((p as any).flashUntil).toISOString() : null,
+    destination_type: (p as any).destinationType ? String((p as any).destinationType) : null,
+    destination_url: (p as any).destinationUrl ? String((p as any).destinationUrl) : null,
+  };
 }
 
 class PromotionService {
-  private initialized = false;
-
   initialize() {
-    if (this.initialized) return;
-    this.initialized = true;
-
-    if (!localStorage.getItem(STORAGE_KEY)) writeAll([]);
     if (!localStorage.getItem(FAVORITES_KEY)) writeFavs([]);
   }
 
   // ===============================
-  // PROMOS
+  // PROMOS (Supabase)
   // ===============================
-  getAll(onlyApproved = false): Promotion[] {
-    const all = readAll();
-    return onlyApproved ? all.filter((p: any) => p.status === 'approved') : all;
-  }
+  async getAll(onlyApproved = false): Promise<Promotion[]> {
+    let q = supabase
+      .from('promotions')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-  getById(id: string): Promotion | undefined {
-    const sid = String(id);
-    return readAll().find(p => String((p as any).id) === sid);
-  }
+    if (onlyApproved) q = q.eq('status', 'approved');
 
-  getByPartner(partnerId: string): Promotion[] {
-    const pid = norm(partnerId);
-    return readAll().filter(p => norm((p as any).partnerId) === pid);
-  }
+    const { data, error } = await q;
 
-  save(promo: Promotion, id?: string) {
-    const all = readAll();
-
-    // ✅ garante id (se vier vazio, cria)
-    const incomingId = id ? String(id) : String((promo as any)?.id ?? '').trim();
-    const finalId = incomingId ? incomingId : genId();
-
-    const next: any = {
-      ...(promo as any),
-      id: finalId,
-      status: normalizeStatus((promo as any)?.status),
-    };
-
-    const idx = all.findIndex(p => String((p as any).id) === finalId);
-
-    if (idx >= 0) {
-      all[idx] = { ...(all[idx] as any), ...next } as any;
-    } else {
-      all.push(next);
+    if (error) {
+      console.error('[promotionService.getAll] error:', error);
+      return [];
     }
 
-    writeAll(all);
+    const rows = Array.isArray(data) ? (data as PromotionRow[]) : [];
+    return rows.map(fromRow);
   }
 
-  updateStatus(id: string, status: any) {
-    const all = readAll();
-    const sid = String(id);
+  async getById(id: string): Promise<Promotion | undefined> {
+    const sid = String(id).trim();
+    if (!sid) return undefined;
 
-    const idx = all.findIndex(p => String((p as any).id) === sid);
-    if (idx < 0) return;
+    const { data, error } = await supabase
+      .from('promotions')
+      .select('*')
+      .eq('id', sid)
+      .maybeSingle();
 
-    all[idx] = { ...(all[idx] as any), status: normalizeStatus(status) } as any;
-    writeAll(all);
+    if (error) {
+      console.error('[promotionService.getById] error:', error);
+      return undefined;
+    }
+
+    if (!data) return undefined;
+    return fromRow(data as PromotionRow);
   }
 
-  deleteByAdmin(id: string) {
-    const sid = String(id);
-    const all = readAll();
-    writeAll(all.filter(p => String((p as any).id) !== sid));
+  async getByPartner(partnerId: string): Promise<Promotion[]> {
+    const pid = String(partnerId || '').trim();
+    if (!pid) return [];
 
-    // limpa favoritos
+    const { data, error } = await supabase
+      .from('promotions')
+      .select('*')
+      .eq('partner_id', pid)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[promotionService.getByPartner] error:', error);
+      return [];
+    }
+
+    const rows = Array.isArray(data) ? (data as PromotionRow[]) : [];
+    return rows.map(fromRow);
+  }
+
+  /**
+   * Salva (cria/atualiza) no Supabase.
+   * ✅ NÃO envia created_at (DB coloca sozinho)
+   * ✅ expiry_date vai como "YYYY-MM-DD"
+   */
+  async save(promo: Promotion, id?: string): Promise<void> {
+    const incomingId = String(id || (promo as any)?.id || '').trim();
+
+    // tenta obter partner_id da promo; se não tiver, pega do auth
+    let partnerId = String((promo as any)?.partnerId || '').trim();
+    if (!partnerId) {
+      const { data } = await supabase.auth.getUser();
+      partnerId = String(data.user?.id || '').trim();
+    }
+
+    const payload: any = toRow(promo, partnerId);
+
+    // Se vier id, garante o id no payload (upsert)
+    if (incomingId) payload.id = incomingId;
+
+    const { error } = await supabase
+      .from('promotions')
+      .upsert(payload, { onConflict: 'id' });
+
+    if (error) {
+      console.error('[promotionService.save] error:', error);
+      throw error;
+    }
+  }
+
+  async updateStatus(id: string, status: any): Promise<void> {
+    const sid = String(id).trim();
+    if (!sid) return;
+
+    const { error } = await supabase
+      .from('promotions')
+      .update({ status: normalizeStatus(status) })
+      .eq('id', sid);
+
+    if (error) {
+      console.error('[promotionService.updateStatus] error:', error);
+      throw error;
+    }
+  }
+
+  async deleteByAdmin(id: string): Promise<void> {
+    const sid = String(id).trim();
+    if (!sid) return;
+
+    const { error } = await supabase
+      .from('promotions')
+      .delete()
+      .eq('id', sid);
+
+    if (error) {
+      console.error('[promotionService.deleteByAdmin] error:', error);
+      throw error;
+    }
+
     const favs = readFavs().filter(fid => String(fid) !== sid);
     writeFavs(favs);
   }
 
-  /**
-   * ✅ Parceiro só apaga do próprio:
-   * - se partnerId bater => apaga
-   * - senão, permite apenas se storeName bater com partnerName (compatibilidade)
-   */
-  deleteByPartner(id: string, partnerId: string, partnerName?: string) {
-    const sid = String(id);
-    const all = readAll();
-    const target = all.find(p => String((p as any).id) === sid);
+  async deleteByPartner(id: string, partnerId: string, partnerName?: string): Promise<void> {
+    const sid = String(id).trim();
+    const pid = String(partnerId || '').trim();
+    if (!sid || !pid) return;
+
+    const target = await this.getById(sid);
     if (!target) return;
 
     const tPartnerId = norm((target as any).partnerId);
-    const sPartnerId = norm(partnerId);
+    const sPartnerId = norm(pid);
 
     const tStore = norm((target as any).storeName);
     const sName = norm(partnerName);
@@ -179,14 +309,22 @@ class PromotionService {
 
     if (!canDeleteById && !canDeleteByName) return;
 
-    writeAll(all.filter(p => String((p as any).id) !== sid));
+    const { error } = await supabase
+      .from('promotions')
+      .delete()
+      .eq('id', sid);
+
+    if (error) {
+      console.error('[promotionService.deleteByPartner] error:', error);
+      throw error;
+    }
 
     const favs = readFavs().filter(fid => String(fid) !== sid);
     writeFavs(favs);
   }
 
   // ===============================
-  // FAVORITOS
+  // FAVORITOS (localStorage)
   // ===============================
   isFavorite(id: string): boolean {
     const sid = String(id);
@@ -210,4 +348,4 @@ class PromotionService {
 }
 
 export const promotionService = new PromotionService();
-export { STORAGE_KEY, FAVORITES_KEY };
+export { FAVORITES_KEY };

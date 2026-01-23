@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Promotion } from '../types';
 import { promotionService } from '../services/promotionService';
 import { authService } from '../services/authService';
+import { supabase } from '../lib/supabaseClient';
 
 const ADMIN_WHATSAPP = '5593981340104';
 
@@ -25,16 +26,15 @@ const PartnerDashboard: React.FC = () => {
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [filter, setFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
 
-  const loadMineByStoreName = (s: SessionInfo) => {
-    if (!s) return [];
+  // ✅ busca SEMPRE pelo UID real do Supabase Auth (não depende do authService.userId)
+  const loadMine = async () => {
+    const { data } = await supabase.auth.getUser();
+    const uid = data.user?.id;
 
-    const all = promotionService.getAll(false);
-    const my = all.filter(p =>
-      String((p as any).storeName || '').trim().toLowerCase() ===
-      String(s.userName || '').trim().toLowerCase()
-    );
+    if (!uid) return [];
 
-    return my;
+    const mine = await promotionService.getByPartner(uid);
+    return mine;
   };
 
   useEffect(() => {
@@ -42,7 +42,6 @@ const PartnerDashboard: React.FC = () => {
 
     (async () => {
       const s = await authService.getCurrentSession();
-
       if (!mounted) return;
 
       if (!s || s.role !== 'partner') {
@@ -52,9 +51,19 @@ const PartnerDashboard: React.FC = () => {
 
       setSession(s);
 
-      promotionService.initialize?.();
+      await promotionService.initialize?.();
 
-      setPromotions(loadMineByStoreName(s));
+      // (debug opcional)
+      try {
+        const { data } = await supabase.auth.getUser();
+        console.log('SUPABASE uid:', data.user?.id);
+        console.log('SESSION userId:', s.userId);
+        console.log('SESSION userName:', s.userName);
+      } catch {}
+
+      const mine = await loadMine();
+      if (!mounted) return;
+      setPromotions(mine);
     })();
 
     return () => {
@@ -63,33 +72,27 @@ const PartnerDashboard: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const reload = () => {
-    if (!session) return;
-    setPromotions(loadMineByStoreName(session));
+  const reload = async () => {
+    const mine = await loadMine();
+    setPromotions(mine);
   };
 
-  // ✅ Excluir: garante que promo antiga recebe partnerId ANTES e recarrega com o mesmo filtro da listagem
-  const handleDeletePromo = (promo: Promotion) => {
-  const ok = window.confirm('Excluir esta promoção? Essa ação não tem volta.');
-  if (!ok) return;
+  const handleDeletePromo = async (promo: Promotion) => {
+    const ok = window.confirm('Excluir esta promoção? Essa ação não tem volta.');
+    if (!ok) return;
 
-  const partnerId = session?.userId;
-  if (!partnerId) {
-    alert('Sessão inválida. Faça login novamente.');
-    return;
-  }
+    // ✅ pega o UID real pra deletar também
+    const { data } = await supabase.auth.getUser();
+    const uid = data.user?.id;
 
-  // ✅ agora funciona para promo nova (partnerId) e antiga (storeName)
-  promotionService.deleteByPartner(promo.id, partnerId, session?.userName);
-reload();
+    if (!uid) {
+      alert('Sessão inválida. Faça login novamente.');
+      return;
+    }
 
-  // ✅ recarrega sua lista do jeito que você já filtra (storeName == userName)
-  reload();
-
-  // (opcional) debug
-  const stillExists = promotionService.getAll(false).some(p => p.id === promo.id);
-  console.log('[PartnerDashboard] delete result:', { id: promo.id, stillExists });
-};
+    await promotionService.deleteByPartner(promo.id, uid, session?.userName);
+    await reload();
+  };
 
   const filtered = useMemo(() => {
     if (filter === 'all') return promotions;
@@ -97,10 +100,7 @@ reload();
   }, [promotions, filter]);
 
   const requestBoost = (promo: Promotion, kind: 'destaque' | 'relampago') => {
-    const title =
-      kind === 'destaque'
-        ? '⭐ PEDIDO DE DESTAQUE'
-        : '⚡ PEDIDO DE PROMOÇÃO RELÂMPAGO (24h)';
+    const title = kind === 'destaque' ? '⭐ PEDIDO DE DESTAQUE' : '⚡ PEDIDO DE PROMOÇÃO RELÂMPAGO (24h)';
 
     const message =
       `${title}\n\n` +
@@ -117,7 +117,7 @@ reload();
   };
 
   const statusBadge = (p: Promotion) => {
-    const base = "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest";
+    const base = 'px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest';
     if (p.status === 'approved') return <span className={`${base} bg-green-100 text-green-700`}>Aprovada</span>;
     if (p.status === 'rejected') return <span className={`${base} bg-red-100 text-red-700`}>Reprovada</span>;
     return <span className={`${base} bg-yellow-100 text-yellow-800`}>Pendente</span>;
@@ -128,9 +128,7 @@ reload();
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-black text-gray-800 uppercase italic">Painel do Parceiro</h1>
-          <p className="text-gray-500 font-bold text-xs uppercase tracking-widest">
-            Gerencie suas promoções
-          </p>
+          <p className="text-gray-500 font-bold text-xs uppercase tracking-widest">Gerencie suas promoções</p>
         </div>
 
         <button
@@ -141,16 +139,13 @@ reload();
         </button>
       </div>
 
-      {/* FILTROS */}
       <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
         {(['all', 'pending', 'approved', 'rejected'] as const).map(s => (
           <button
             key={s}
             onClick={() => setFilter(s)}
             className={`px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all ${
-              filter === s
-                ? 'bg-black text-white shadow-lg'
-                : 'bg-white text-gray-400 border border-gray-100 hover:border-yellow-400'
+              filter === s ? 'bg-black text-white shadow-lg' : 'bg-white text-gray-400 border border-gray-100 hover:border-yellow-400'
             }`}
           >
             {s === 'all' ? 'Todas' : s === 'pending' ? 'Pendentes' : s === 'approved' ? 'Aprovadas' : 'Reprovadas'}
@@ -158,7 +153,6 @@ reload();
         ))}
       </div>
 
-      {/* LISTA */}
       <div className="bg-white rounded-[2rem] shadow-sm border border-gray-100 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -176,11 +170,7 @@ reload();
                 <tr key={promo.id} className="hover:bg-gray-50/50 transition-colors">
                   <td className="px-6 py-5 flex items-center gap-4">
                     {promo.imageUrl ? (
-                      <img
-                        src={promo.imageUrl}
-                        className="w-12 h-12 rounded-xl object-cover shadow-sm"
-                        alt=""
-                      />
+                      <img src={promo.imageUrl} className="w-12 h-12 rounded-xl object-cover shadow-sm" alt="" />
                     ) : (
                       <div className="w-12 h-12 rounded-xl bg-gray-200 shadow-sm" />
                     )}
@@ -214,7 +204,6 @@ reload();
                       <button
                         onClick={() => requestBoost(promo, 'destaque')}
                         className="bg-yellow-400 hover:bg-yellow-500 text-black px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-yellow-100 active:scale-95 transition-all"
-                        title="Pedir destaque ao admin"
                       >
                         Pedir ⭐ Destaque
                       </button>
@@ -222,7 +211,6 @@ reload();
                       <button
                         onClick={() => requestBoost(promo, 'relampago')}
                         className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-red-100 active:scale-95 transition-all"
-                        title="Pedir relâmpago 24h ao admin"
                       >
                         Pedir ⚡ Relâmpago
                       </button>
@@ -243,29 +231,24 @@ reload();
                     </button>
 
                     <button
-  onClick={() => handleDeletePromo(promo)}
-  className="text-red-500 hover:text-red-600 transition-colors"
-  title="Excluir"
->
-  <i className="fas fa-trash"></i>
-</button>
-
+                      onClick={() => handleDeletePromo(promo)}
+                      className="text-red-500 hover:text-red-600 transition-colors"
+                      title="Excluir"
+                    >
+                      <i className="fas fa-trash"></i>
+                    </button>
                   </td>
                 </tr>
               ))}
 
               {filtered.length === 0 && (
                 <tr>
-                  <td
-                    colSpan={4}
-                    className="px-6 py-16 text-center text-gray-400 font-bold uppercase text-xs tracking-widest"
-                  >
+                  <td colSpan={4} className="px-6 py-16 text-center text-gray-400 font-bold uppercase text-xs tracking-widest">
                     Nenhuma promoção encontrada.
                   </td>
                 </tr>
               )}
             </tbody>
-
           </table>
         </div>
       </div>

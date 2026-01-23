@@ -37,14 +37,15 @@ const Home: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      await promotionService.initialize();
-      setPromotions(promotionService.getAll(true)); // só aprovadas
-      setLoading(false);
-    };
-    load();
-  }, []);
+  const load = async () => {
+    setLoading(true);
+    await promotionService.initialize();
+    const list = await promotionService.getAll(true); // ✅ só aprovadas
+    setPromotions(list);
+    setLoading(false);
+  };
+  load();
+}, []);
 
   const now = Date.now();
 

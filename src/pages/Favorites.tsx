@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Promotion } from '../types';
 import { promotionService } from '../services/promotionService';
@@ -8,9 +7,9 @@ import { Link } from 'react-router-dom';
 const Favorites: React.FC = () => {
   const [favoritePromos, setFavoritePromos] = useState<Promotion[]>([]);
 
-  const loadFavorites = () => {
+  const loadFavorites = async () => {
     const favoritesIds = promotionService.getFavorites();
-    const allPromos = promotionService.getAll(true);
+    const allPromos = await promotionService.getAll(true);
     setFavoritePromos(allPromos.filter(p => favoritesIds.includes(p.id)));
   };
 
@@ -30,9 +29,9 @@ const Favorites: React.FC = () => {
       {favoritePromos.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
           {favoritePromos.map(promo => (
-            <PromotionCard 
-              key={promo.id} 
-              promo={promo} 
+            <PromotionCard
+              key={promo.id}
+              promo={promo}
               onFavoriteToggle={loadFavorites}
             />
           ))}
@@ -44,8 +43,8 @@ const Favorites: React.FC = () => {
           </div>
           <h3 className="text-xl font-bold text-gray-800">Sua lista está vazia</h3>
           <p className="text-gray-500 mt-2">Clique no coração nos produtos para salvá-los aqui.</p>
-          <Link 
-            to="/" 
+          <Link
+            to="/"
             className="mt-6 inline-block bg-yellow-400 text-black px-8 py-3 rounded-xl font-bold hover:bg-yellow-500 transition-all shadow-lg"
           >
             Explorar Ofertas

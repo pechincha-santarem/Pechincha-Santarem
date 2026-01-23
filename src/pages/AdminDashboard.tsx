@@ -64,7 +64,8 @@ const AdminDashboard: React.FC = () => {
   }, [navigate]);
 
   const loadData = async () => {
-    setPromotions(promotionService.getAll(false));
+    const all = await promotionService.getAll(false);
+    setPromotions(all);
 
     // ✅ PERFIS (parceiros) — buscar campos que EXISTEM + role
     const { data: profs, error: pErr } = await sb
@@ -142,16 +143,16 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
-  const handleAdAction = (id: string, status: PromotionStatus) => {
-    promotionService.updateStatus(id, status);
-    loadData();
+  const handleAdAction = async (id: string, status: PromotionStatus) => {
+    await promotionService.updateStatus(id, status);
+    await loadData();
   };
 
-  const updatePromotionPatch = (id: string, patch: Partial<Promotion>) => {
-    const existing = promotionService.getById?.(id);
+  const updatePromotionPatch = async (id: string, patch: Partial<Promotion>) => {
+    const existing = await promotionService.getById?.(id);
     if (!existing) return;
 
-    promotionService.save(
+    await promotionService.save(
       {
         title: existing.title,
         description: existing.description,
@@ -172,23 +173,23 @@ const AdminDashboard: React.FC = () => {
       id
     );
 
-    loadData();
+    await loadData();
   };
 
-  const toggleFeatured = (promo: Promotion) => {
-    updatePromotionPatch(promo.id, { isFeatured: !promo.isFeatured });
+  const toggleFeatured = async (promo: Promotion) => {
+    await updatePromotionPatch(promo.id, { isFeatured: !promo.isFeatured });
   };
 
-  const toggleFlash24h = (promo: Promotion) => {
+  const toggleFlash24h = async (promo: Promotion) => {
     const isOn = Boolean(promo.isFlash);
 
     if (isOn) {
-      updatePromotionPatch(promo.id, { isFlash: false, flashUntil: undefined as any });
+      await updatePromotionPatch(promo.id, { isFlash: false, flashUntil: undefined as any });
       return;
     }
 
     const until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    updatePromotionPatch(promo.id, { isFlash: true, flashUntil: until as any });
+    await updatePromotionPatch(promo.id, { isFlash: true, flashUntil: until as any });
   };
 
   // ✅ Criar/Editar parceiro
@@ -581,8 +582,10 @@ const AdminDashboard: React.FC = () => {
                               const ok = window.confirm('Excluir esta promoção? Essa ação não pode ser desfeita.');
                               if (!ok) return;
 
-                              promotionService.deleteByAdmin(promo.id);
-                              loadData();
+                              (async () => {
+                                await promotionService.deleteByAdmin(promo.id);
+                                await loadData();
+                              })().catch((e) => console.error(e));
                             }}
                             className="text-red-500 hover:text-red-600 transition-colors"
                             title="Excluir"
