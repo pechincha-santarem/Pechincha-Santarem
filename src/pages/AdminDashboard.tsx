@@ -1,3 +1,4 @@
+// src/pages/AdminDashboard.tsx
 import React, { useState, useEffect } from 'react';
 import {
   Promotion,
@@ -31,6 +32,28 @@ type LeadRow = {
   active?: boolean | null;
   created_at: string;
 };
+
+// ================================
+// ✅ helpers cirúrgicos (aprovação)
+// ================================
+type ApprovedMode = 'normal' | 'featured' | 'flash';
+
+async function mustGetAdminUid(): Promise<string> {
+  const { data, error } = await supabase.auth.getUser();
+  if (error) throw error;
+  const uid = data?.user?.id ?? '';
+  if (!uid) throw new Error('ADMIN_UID_MISSING');
+  return uid;
+}
+
+function toISO(d: Date) {
+  return d.toISOString();
+}
+function plusHours(date: Date, hours: number) {
+  const d = new Date(date.getTime());
+  d.setHours(d.getHours() + hours);
+  return d;
+}
 
 const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'ads' | 'users' | 'leads'>('ads');
@@ -148,48 +171,104 @@ const AdminDashboard: React.FC = () => {
     await loadData();
   };
 
-  const updatePromotionPatch = async (id: string, patch: Partial<Promotion>) => {
-    const existing = await promotionService.getById?.(id);
-    if (!existing) return;
+  // =========================================================
+  // ✅ PATCH CIRÚRGICO:
+  // - NÃO usa promotionService.save() (que zera aprovação)
+  // - Destaque/Relâmpago fazem UPDATE direto (snake_case)
+  // =========================================================
 
-    await promotionService.save(
-      {
-        title: existing.title,
-        description: existing.description,
-        currentPrice: existing.currentPrice,
-        oldPrice: existing.oldPrice,
-        category: existing.category,
-        expiryDate: existing.expiryDate,
-        imageUrl: existing.imageUrl,
-        storeName: existing.storeName,
-        status: existing.status,
-        isFeatured: existing.isFeatured,
-        isFlash: existing.isFlash,
-        flashUntil: (existing as any).flashUntil,
-        destinationType: existing.destinationType,
-        destinationUrl: existing.destinationUrl,
-        ...patch,
-      } as any,
-      id
-    );
+  // Update comum (edição) — não mexe em status/approval/flags
+  const updatePromotionPatch = async (id: string, patch: Partial<Promotion>) => {
+    const sid = String(id || '').trim();
+    if (!sid) return;
+
+    const safePatch: any = { ...(patch as any) };
+
+    // bloqueia qualquer tentativa de mexer em aprovação/flags
+    delete safePatch.status;
+    delete safePatch.approvedAt;
+    delete safePatch.approvedMode;
+    delete safePatch.approvedBy;
+    delete safePatch.isFeatured;
+    delete safePatch.isFlash;
+    delete safePatch.flashUntil;
+
+    delete safePatch.approved_at;
+    delete safePatch.approved_mode;
+    delete safePatch.approved_by;
+    delete safePatch.is_featured;
+    delete safePatch.is_flash;
+    delete safePatch.flash_until;
+
+    const { error } = await sb.from('promotions').update(safePatch).eq('id', sid);
+    if (error) throw error;
 
     await loadData();
   };
 
   const toggleFeatured = async (promo: Promotion) => {
-    await updatePromotionPatch(promo.id, { isFeatured: !promo.isFeatured });
+    const id = String((promo as any).id || '').trim();
+    if (!id) return;
+
+    let uid = '';
+    try {
+      uid = await mustGetAdminUid();
+    } catch (e: any) {
+      alert('Sessão do admin não encontrada. Faça login novamente no admin.');
+      throw e;
+    }
+
+    const now = new Date();
+    const turnOn = !Boolean((promo as any).isFeatured);
+
+    const payload = {
+      status: 'approved',
+      approved_at: toISO(now),
+      approved_mode: (turnOn ? 'featured' : 'normal') as ApprovedMode,
+      approved_by: uid,
+
+      is_featured: turnOn,
+      is_flash: false,
+      flash_until: null,
+    };
+
+    const { error } = await sb.from('promotions').update(payload).eq('id', id);
+    if (error) throw error;
+
+    await loadData();
   };
 
   const toggleFlash24h = async (promo: Promotion) => {
-    const isOn = Boolean(promo.isFlash);
+    const id = String((promo as any).id || '').trim();
+    if (!id) return;
 
-    if (isOn) {
-      await updatePromotionPatch(promo.id, { isFlash: false, flashUntil: undefined as any });
-      return;
+    let uid = '';
+    try {
+      uid = await mustGetAdminUid();
+    } catch (e: any) {
+      alert('Sessão do admin não encontrada. Faça login novamente no admin.');
+      throw e;
     }
 
-    const until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    await updatePromotionPatch(promo.id, { isFlash: true, flashUntil: until as any });
+    const now = new Date();
+    const isOn = Boolean((promo as any).isFlash);
+    const mode: ApprovedMode = isOn ? 'normal' : 'flash';
+
+    const payload = {
+      status: 'approved',
+      approved_at: toISO(now),
+      approved_mode: mode,
+      approved_by: uid,
+
+      is_flash: !isOn,
+      is_featured: false,
+      flash_until: !isOn ? toISO(plusHours(now, 24)) : null,
+    };
+
+    const { error } = await sb.from('promotions').update(payload).eq('id', id);
+    if (error) throw error;
+
+    await loadData();
   };
 
   // ✅ Criar/Editar parceiro
@@ -405,6 +484,10 @@ const AdminDashboard: React.FC = () => {
 
   return (
     <div className="space-y-8">
+      <div style={{ background: 'red', color: 'white', padding: 12, fontWeight: 900 }}>
+  ADMIN DASHBOARD NOVO (MARCA)
+</div>
+
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-black text-gray-800 uppercase italic">Gestão Total 🛡️</h1>
@@ -576,7 +659,6 @@ const AdminDashboard: React.FC = () => {
                             <i className="fas fa-edit"></i>
                           </button>
 
-                          {/* ✅ EXCLUIR (ADMIN) — adicionada sem mudar estrutura */}
                           <button
                             onClick={() => {
                               const ok = window.confirm('Excluir esta promoção? Essa ação não pode ser desfeita.');
