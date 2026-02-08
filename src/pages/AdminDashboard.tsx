@@ -484,10 +484,7 @@ const AdminDashboard: React.FC = () => {
 
   return (
     <div className="space-y-8">
-      <div style={{ background: 'red', color: 'white', padding: 12, fontWeight: 900 }}>
-  ADMIN DASHBOARD NOVO (MARCA)
-</div>
-
+     
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-black text-gray-800 uppercase italic">Gestão Total 🛡️</h1>
