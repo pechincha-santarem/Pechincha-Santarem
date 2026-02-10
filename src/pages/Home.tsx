@@ -49,38 +49,67 @@ const Home: React.FC = () => {
 
   const now = Date.now();
 
-  // ✅ RELÂMPAGO válido: isFlash=true e (flashUntil) ainda não expirou
-  const flashPromotions = useMemo(() => {
-    return promotions
-      .filter(p => {
-        if (!p.isFlash) return false;
-        if (!p.flashUntil) return false;
-        return new Date(p.flashUntil).getTime() > now;
-      })
-      // ordena por expiração (mais urgente primeiro)
-      .sort((a, b) => new Date(a.flashUntil!).getTime() - new Date(b.flashUntil!).getTime());
-  }, [promotions, now]);
+/**
+ * 🚨 Qualquer forma de relâmpago
+ * (novo + legado)
+ */
+const isAnyFlash = (p: Promotion) => {
+  return (
+    (p as any).approvedMode === 'flash' ||
+    Boolean((p as any).isFlash) ||
+    Boolean((p as any).flashUntil)
+  );
+};
 
-  // ✅ DESTAQUES: isFeatured (sem confundir com relâmpago)
-  const featuredPromotions = useMemo(() => {
-    return promotions.filter(p => p.isFeatured);
-  }, [promotions]);
+/**
+ * ⚡ PROMOÇÕES RELÂMPAGO VÁLIDAS (24h)
+ */
+const flashPromotions = useMemo(() => {
+  return promotions
+    .filter(p => {
+      if (!isAnyFlash(p)) return false;
+      if (!p.flashUntil) return false;
+      return new Date(p.flashUntil).getTime() > now;
+    })
+    .sort(
+      (a, b) =>
+        new Date(a.flashUntil!).getTime() -
+        new Date(b.flashUntil!).getTime()
+    );
+}, [promotions, now]);
 
-  const filteredPromotions = useMemo(() => {
-    const term = searchTerm.toLowerCase();
+/**
+ * ⭐ DESTAQUES
+ * (nunca relâmpago)
+ */
+const featuredPromotions = useMemo(() => {
+  return promotions.filter(p => p.isFeatured && !isAnyFlash(p));
+}, [promotions]);
 
-    return promotions.filter(p => {
-      const matchesCategory =
-        selectedCategory === 'Todos' || p.category === selectedCategory;
+/**
+ * 💰 IMPERDÍVEIS DO DIA / RESULTADOS
+ * ❌ relâmpago nunca entra aqui
+ */
+const filteredPromotions = useMemo(() => {
+  const term = searchTerm.toLowerCase();
 
-      const matchesSearch =
-        (p.title ?? '').toLowerCase().includes(term) ||
-        (p.description ?? '').toLowerCase().includes(term) ||
-        (p.storeName ?? '').toLowerCase().includes(term);
+  return promotions.filter(p => {
+    // 🚫 regra absoluta
+    if (!searchTerm && selectedCategory === 'Todos' && isAnyFlash(p)) {
+      return false;
+    }
 
-      return matchesCategory && matchesSearch;
-    });
-  }, [promotions, selectedCategory, searchTerm]);
+    const matchesCategory =
+      selectedCategory === 'Todos' || p.category === selectedCategory;
+
+    const matchesSearch =
+      (p.title ?? '').toLowerCase().includes(term) ||
+      (p.description ?? '').toLowerCase().includes(term) ||
+      (p.storeName ?? '').toLowerCase().includes(term);
+
+    return matchesCategory && matchesSearch;
+  });
+}, [promotions, selectedCategory, searchTerm]);
 
   return (
     <div className="space-y-12">
